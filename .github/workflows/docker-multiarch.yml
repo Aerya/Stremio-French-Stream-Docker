@@ -1,13 +1,10 @@
-name: Build and publish Docker image
+name: Sync upstream and publish Docker image
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+
   schedule:
+    # Chaque lundi à 04:17 UTC
     - cron: "17 4 * * 1"
 
 env:
@@ -16,25 +13,47 @@ env:
   UPSTREAM_REPOSITORY: Nikola17/addon-stremio-fs-public-render
   UPSTREAM_REF: main
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
-  docker:
+  sync-and-build:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      packages: write
-
     steps:
-      - name: Checkout upstream repository
+      - name: Checkout Aerya repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ env.UPSTREAM_REF }}
-          path: source
+          fetch-depth: 0
 
-      - name: Create Dockerfile
-        working-directory: source
+      - name: Clone upstream repository
+        shell: bash
         run: |
+          rm -rf "$RUNNER_TEMP/upstream"
+
+          git clone \
+            --depth 1 \
+            --branch "${UPSTREAM_REF}" \
+            "https://github.com/${UPSTREAM_REPOSITORY}.git" \
+            "$RUNNER_TEMP/upstream"
+
+          cd "$RUNNER_TEMP/upstream"
+
+          echo "UPSTREAM_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Copy upstream into Aerya repository
+        id: sync
+        shell: bash
+        run: |
+          rsync -a --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "compose.yml" \
+            "$RUNNER_TEMP/upstream/" \
+            "./"
+
           cat > Dockerfile <<'EOF'
           FROM node:22-bookworm-slim
 
@@ -53,68 +72,82 @@ jobs:
           CMD ["node", "server.js"]
           EOF
 
-      - name: Create .dockerignore
-        working-directory: source
-        run: |
           cat > .dockerignore <<'EOF'
           .git
           .github
           node_modules
           npm-debug.log
-          Dockerfile
-          .dockerignore
+          compose.yml
           EOF
 
-      - name: Prepare image tags
+          echo "${UPSTREAM_SHA}" > .upstream-sha
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Changements upstream détectés."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Aucun changement upstream."
+          fi
+
+      - name: Commit and push changes
+        if: steps.sync.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "Sync upstream ${UPSTREAM_REPOSITORY}@${UPSTREAM_SHORT_SHA}"
+          git push
+
+      - name: Prepare Docker image tags
         id: vars
+        if: steps.sync.outputs.changed == 'true'
         shell: bash
         run: |
           OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
           IMAGE="${REGISTRY}/${OWNER_LC}/${IMAGE_NAME}"
-          SHORT_SHA="${GITHUB_SHA::7}"
 
           {
-            echo "image=${IMAGE}"
             echo "tags<<EOF"
             echo "${IMAGE}:latest"
-            echo "${IMAGE}:sha-${SHORT_SHA}"
-
-            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-              VERSION="${GITHUB_REF_NAME#v}"
-              echo "${IMAGE}:${GITHUB_REF_NAME}"
-              echo "${IMAGE}:${VERSION}"
-            fi
-
+            echo "${IMAGE}:upstream-${UPSTREAM_SHORT_SHA}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
+        if: steps.sync.outputs.changed == 'true'
         uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
+        if: steps.sync.outputs.changed == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
+        if: steps.sync.outputs.changed == 'true'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push multi-arch image
+      - name: Build and push Docker image
+        if: steps.sync.outputs.changed == 'true'
         uses: docker/build-push-action@v7
         with:
-          context: ./source
-          file: ./source/Dockerfile
+          context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.vars.outputs.tags }}
           labels: |
             org.opencontainers.image.title=Stremio French Stream Docker
-            org.opencontainers.image.description=Docker multi-arch packaging for Nikola17/addon-stremio-fs-public-render
-            org.opencontainers.image.source=https://github.com/Aerya/Stremio-French-Stream-Docker
-            org.opencontainers.image.url=https://github.com/Aerya/Stremio-French-Stream-Docker
-            org.opencontainers.image.documentation=https://github.com/Aerya/Stremio-French-Stream-Docker
+            org.opencontainers.image.description=Docker multi-arch image synced from Nikola17/addon-stremio-fs-public-render
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.UPSTREAM_SHA }}
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
