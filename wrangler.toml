@@ -1,0 +1,7 @@
+name = "addon-stremio-fs-public"
+main = "src/worker.mjs"
+compatibility_date = "2026-05-22"
+
+rules = [
+    { type = "Text", globs = ["**/*.html"], fallthrough = true }
+]
