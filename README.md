@@ -1,3 +1,7 @@
+HS : le créateur de l'addon, que j'ai seulement passé en Docker, s'en tape complètement et ne mets plus à jour.
+https://github.com/Nikola17/addon-stremio-fs-public-render/issues/1
+
+
 # French Stream Public Stremio Addon
 
 Addon Stremio public pour afficher des catalogues films et series francais.
