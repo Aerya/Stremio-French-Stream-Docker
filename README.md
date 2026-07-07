@@ -1,4 +1,4 @@
-HS : le créateur de l'addon, que j'ai seulement passé en Docker, s'en tape complètement et ne mets plus à jour.
+HS : le créateur de l'addon, que j'ai seulement passé en Docker, s'en fiche complètement et ne met plus à jour.
 https://github.com/Nikola17/addon-stremio-fs-public-render/issues/1
 
 
